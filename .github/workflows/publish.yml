@@ -1,0 +1,103 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  build:
+    needs: tests
+    runs-on: ubuntu-latest
+    container: condaforge/miniforge3:24.11.3-0
+    env:
+      CONDA_PKGS_DIRS: ${{ github.workspace }}/.cache/conda/pkgs
+      PIP_CACHE_DIR: ${{ github.workspace }}/.cache/pip
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Create project-local build environment
+        run: /opt/conda/bin/conda create -y -p .conda/engagequeue -c conda-forge python=3.12 pip
+      - name: Install build and validation tools
+        run: .conda/engagequeue/bin/python -m pip install -e '.[dev]'
+      - name: Check release version
+        run: .conda/engagequeue/bin/python scripts/check_release.py --tag "$RELEASE_TAG"
+      - name: Build distributions
+        run: .conda/engagequeue/bin/python -m build --no-isolation
+      - name: Validate distributions
+        run: |
+          .conda/engagequeue/bin/python scripts/check_release.py --tag "$RELEASE_TAG" --dist dist
+          .conda/engagequeue/bin/python -m twine check --strict dist/*
+      - name: Install the wheel in a clean project-local environment
+        run: |
+          /opt/conda/bin/conda create -y -p .conda/engagequeue-wheel -c conda-forge python=3.12 pip
+          .conda/engagequeue-wheel/bin/python -m pip install dist/*.whl
+      - name: Smoke-test the installed wheel and CLI
+        run: |
+          .conda/engagequeue-wheel/bin/python - <<'PY'
+          import shutil
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          import engagequeue
+          from engagequeue import Executor, JobSpec, JobState
+
+          assert Path(engagequeue.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+          work = Path(tempfile.mkdtemp(prefix="engagequeue-release-"))
+          cli = Path(sys.prefix) / "bin" / "engagequeue"
+          assert subprocess.check_output([str(cli), "--version"], cwd=work, text=True).strip() == (
+              "engagequeue " + engagequeue.__version__
+          )
+          with Executor(work / "state") as executor:
+              try:
+                  job = executor.submit(JobSpec(["/bin/echo", "release wheel"], cwd=str(work)), key="release-smoke")
+                  assert executor.wait(job.id, timeout=20).state == JobState.SUCCEEDED
+                  output = executor.store.get(job.id)["spec"]["stdout"]
+                  assert Path(output).read_text() == "release wheel\n"
+              finally:
+                  try:
+                      for status in executor.list():
+                          if not status.terminal:
+                              executor.cancel(status.id, wait=True, timeout=20)
+                  finally:
+                      executor.shutdown(wait=True, timeout=20)
+          shutil.rmtree(work)
+          PY
+      - name: Save verified distributions
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: python-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/engagequeue/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download verified distributions
+        uses: actions/download-artifact@v8.0.2
+        with:
+          name: python-distributions
+          path: dist
+      - name: Publish with PyPI trusted publishing
+        uses: pypa/gh-action-pypi-publish@release/v1

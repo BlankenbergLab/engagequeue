@@ -1,0 +1,8 @@
+EngageQueue
+Copyright (c) 2026 Blankenberg Lab
+
+EngageQueue's original implementation is distributed under the MIT license.
+The project continues local-execution work developed for Pulsar and Galaxy.
+Pulsar is distributed under the Apache License, Version 2.0; Galaxy is
+MIT-licensed. Any copied source retains its upstream license and notices.
+Integration changes follow the license of their respective upstream project.

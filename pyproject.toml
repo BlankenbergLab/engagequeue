@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "engagequeue"
+version = "0.1.0"
+description = "Durable local job execution for Python applications and the command line"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Daniel Blankenberg"}]
+dependencies = ["psutil>=5.9", "PyYAML>=6"]
+classifiers = ["Operating System :: POSIX :: Linux", "Programming Language :: Python :: 3", "Topic :: System :: Distributed Computing"]
+
+[project.urls]
+Source = "https://github.com/BlankenbergLab/engagequeue"
+Documentation = "https://github.com/BlankenbergLab/engagequeue/blob/main/README.md"
+Issues = "https://github.com/BlankenbergLab/engagequeue/issues"
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+dev = ["pytest>=8", "build>=1", "setuptools>=69", "ruff", "wheel", "twine", "tomli>=2; python_version<'3.11'"]
+
+[project.scripts]
+engagequeue = "engagequeue.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
