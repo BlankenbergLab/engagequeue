@@ -30,5 +30,109 @@ jobs:
         run: .conda/engagequeue/bin/ruff format --check src tests scripts
       - name: Tests
         run: .conda/engagequeue/bin/python -m pytest -q --junitxml=reports/pytest-results.xml
+      - name: Annotate test failures
+        if: failure()
+        run: .conda/engagequeue/bin/python scripts/report_ci_failures.py reports
+      - name: Save test reports
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: pytest-linux-${{ matrix.python }}
+          path: reports/*.xml
+          if-no-files-found: ignore
       - name: Build distributions
         run: .conda/engagequeue/bin/python -m build --no-isolation
+
+  macos:
+    name: macOS (${{ matrix.runner }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel, macos-15]
+        python: ['3.10', '3.12', '3.14']
+    env:
+      CONDA_PKGS_DIRS: ${{ github.workspace }}/.cache/conda/pkgs
+      PIP_CACHE_DIR: ${{ github.workspace }}/.cache/pip
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Miniforge
+        shell: bash
+        run: |
+          if [ ! -x "$HOME/miniforge3/bin/conda" ]; then
+            curl -fsSL "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-MacOSX-$(uname -m).sh" -o "$RUNNER_TEMP/miniforge.sh"
+            bash "$RUNNER_TEMP/miniforge.sh" -b -p "$HOME/miniforge3"
+          fi
+      - name: Create project-local environment
+        run: '"$HOME/miniforge3/bin/conda" create -y -p .conda/engagequeue -c conda-forge python=${{ matrix.python }} pip'
+      - name: Install
+        run: .conda/engagequeue/bin/python -m pip install -e '.[dev]'
+      - name: Lint
+        run: .conda/engagequeue/bin/ruff check src tests scripts
+      - name: Formatting
+        run: .conda/engagequeue/bin/ruff format --check src tests scripts
+      - name: Native macOS tests
+        run: .conda/engagequeue/bin/python -m pytest -q --junitxml=reports/pytest-results.xml
+      - name: Annotate test failures
+        if: failure()
+        run: .conda/engagequeue/bin/python scripts/report_ci_failures.py reports
+      - name: Save test reports
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: pytest-${{ matrix.runner }}-${{ matrix.python }}
+          path: reports/*.xml
+          if-no-files-found: ignore
+      - name: Build distributions
+        run: .conda/engagequeue/bin/python -m build --no-isolation
+
+  managed-docker:
+    name: Managed Docker (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    env:
+      CONDA_PKGS_DIRS: ${{ github.workspace }}/.cache/conda/pkgs
+      PIP_CACHE_DIR: ${{ github.workspace }}/.cache/pip
+      ENGAGEQUEUE_TEST_MANAGED_DOCKER: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Miniforge
+        shell: bash
+        run: |
+          if [ ! -x "$HOME/miniforge3/bin/conda" ]; then
+            curl -fsSL "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-$(uname -m).sh" -o "$RUNNER_TEMP/miniforge.sh"
+            bash "$RUNNER_TEMP/miniforge.sh" -b -p "$HOME/miniforge3"
+          fi
+      - name: Create project-local environment
+        run: '"$HOME/miniforge3/bin/conda" create -y -p .conda/engagequeue -c conda-forge python=3.12 pip'
+      - name: Install
+        run: .conda/engagequeue/bin/python -m pip install -e '.[dev]'
+      - name: Require a working Docker daemon
+        run: docker info
+      - name: Build the runtime wheel
+        run: |
+          .conda/engagequeue/bin/python -m build --wheel --no-isolation
+          .conda/engagequeue/bin/python - <<'PY'
+          import os
+          from pathlib import Path
+
+          wheels = list(Path('dist').glob('*.whl'))
+          assert len(wheels) == 1, wheels
+          with Path(os.environ['GITHUB_ENV']).open('a') as stream:
+              stream.write('ENGAGEQUEUE_TEST_RUNTIME_WHEEL=' + str(wheels[0].resolve()) + '\n')
+          PY
+      - name: Exercise managed runtime lifecycle
+        run: .conda/engagequeue/bin/python -m pytest -q tests/test_managed_live.py --junitxml=reports/managed-docker-results.xml
+      - name: Annotate test failures
+        if: failure()
+        run: .conda/engagequeue/bin/python scripts/report_ci_failures.py reports
+      - name: Save test reports
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: pytest-managed-${{ matrix.runner }}
+          path: reports/*.xml
+          if-no-files-found: ignore

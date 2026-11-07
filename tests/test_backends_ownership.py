@@ -213,11 +213,15 @@ def test_only_exact_daemon_absence_of_queried_container_is_accepted(monkeypatch,
     assert not OwnedContainer(configuration()).running()
 
 
-def test_exception_cannot_publish_stopped_writers_before_kernel_quiescence(tmp_path, monkeypatch):
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_exception_cannot_publish_stopped_writers_before_kernel_quiescence(tmp_path, monkeypatch, platform):
     store, row = prepare(tmp_path, "pass")
+    original_boot = boot_identity()
+    monkeypatch.setattr("engagequeue.backends.native.boot_identity", lambda: original_boot)
+    monkeypatch.setattr("engagequeue._platform.system_name", lambda: platform)
 
     class FailingLauncher:
-        def __init__(self):
+        def __init__(self, *args):
             self.calls = 0
 
         def start(self, argv):
@@ -227,8 +231,8 @@ def test_exception_cannot_publish_stopped_writers_before_kernel_quiescence(tmp_p
             self.calls += 1
             if self.calls == 1:
                 raise OSError("controller evidence write failed")
-            # A snapshot can be empty while an orphan is being adopted. The
-            # kernel's child/cgroup state remains the authoritative boundary.
+            # An empty snapshot cannot stand in for the launcher's independent
+            # proof of process-group, child, or cgroup quiescence.
             return []
 
         def quiescent(self):
@@ -238,6 +242,7 @@ def test_exception_cannot_publish_stopped_writers_before_kernel_quiescence(tmp_p
             pytest.fail("Unknown live writers cannot authorize cleanup")
 
     monkeypatch.setattr("engagequeue.backends.native.NativeLauncher", FailingLauncher)
+    monkeypatch.setattr("engagequeue.backends.darwin.DarwinLauncher", FailingLauncher)
     assert supervise(str(store.root), row["id"], row["worker_token"]) == 125
     result = store.get(row["id"])
     assert result["state"] == "LOST" and not result["writers_stopped"]

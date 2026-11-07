@@ -3,6 +3,12 @@
 EngageQueue's core has no Galaxy or Pulsar imports. Both integrations execute
 prepared commands and use the same durable submission and status contract.
 
+Integrations may select local `Executor` execution or managed `DockerExecutor`
+placement. Managed jobs run Linux commands with explicit workspace sharing;
+dependency resolution must provide Linux-compatible tools. macOS local jobs
+must remain in their supervised foreground process group. A managed runtime
+uses the same ownership and result contract as the Linux native backend.
+
 ## Galaxy
 
 The native `galaxy.jobs.runners.engagequeue:EngageQueueJobRunner` imports the

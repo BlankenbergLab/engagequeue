@@ -1,5 +1,7 @@
 include LICENSE NOTICE README.md
 include scripts/check_release.py
+include scripts/report_ci_failures.py
 recursive-include docs *.md
 recursive-include docs/assets *.png *.svg
+recursive-include src/engagequeue/runtime_image *
 recursive-include tests *.py

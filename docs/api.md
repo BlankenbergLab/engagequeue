@@ -1,6 +1,9 @@
 # Python API and CLI
 
-The CLI is a frontend for the importable Python API:
+The CLI is a frontend for the importable Python API. `Executor` and explicit
+`--execution-mode local` run on the local host. The CLI recognizes a saved
+managed profile automatically; a state directory without one defaults to local
+execution:
 
 ```python
 from engagequeue import Executor, JobSpec, PoolConfig
@@ -12,6 +15,77 @@ with Executor('/ssd/engagequeue', pools={'batch': PoolConfig(max_jobs=4)}) as ex
     )
     status = executor.status(job.id)
 ```
+
+Linux native execution includes subreaper ownership of daemonized descendants.
+On macOS, local jobs must remain foreground commands with descendants in their
+original process group. Use managed Docker execution for jobs that daemonize or
+need the Linux supervision contract. The systemd backend is Linux-only.
+
+## Managed Docker execution
+
+`DockerExecutor` exposes the same submission and job-control methods while
+placing the native Linux runtime in a managed Docker container. Execution mode
+is separate from `PoolConfig.backend`; managed runtime pools use `native`.
+
+```python
+from pathlib import Path
+from engagequeue import DockerExecutor, JobSpec
+
+workspace = Path('/Users/me/project').resolve()
+wheel = workspace / 'dist/engagequeue-0.1.1-py3-none-any.whl'
+
+with DockerExecutor(workspace / '.engagequeue-runtime') as executor:
+    executor.initialize(workspaces=[str(workspace)], wheel=str(wheel))
+    job = executor.submit(
+        JobSpec(argv=['sh', '-c', 'printf "managed execution\\n"'], cwd=str(workspace)),
+        key='managed:example:1',
+    )
+    result = executor.wait(job.id, timeout=120)
+```
+
+`initialize(*, workspaces=None, image=None, wheel=None, docker_context=None,
+docker_jobs=None)` prepares and starts the runtime. Supply an existing runtime
+image with `image`, or a built wheel with `wheel` to build one. Workspace roots
+are required on first initialization and are mounted at the same absolute paths
+inside the runtime. Omitted workspace and sibling-Docker settings retain an
+existing profile; a new profile defaults to sibling Docker access disabled.
+Commands use Linux executables and the runtime image's environment; a Mac
+interpreter or host Conda environment is not executable inside Linux.
+
+The constructor accepts `pools=None`, `poll_interval=0.2`, and
+`attach_only=False`. A later client uses the saved profile without initializing
+it again. `close()` and context-manager exit disconnect that client;
+`start()` starts or resumes admission, `stop(timeout=120)` drains running work
+and shuts down the owned runtime while retaining its state volume and queued
+work, and `runtime_info()` reports the managed runtime profile and status.
+Change an initialized profile only after a clean stop.
+
+Use `docker_context` to select a Docker context. Enable `docker_jobs=True` when
+workload commands need sibling Docker containers; this gives the runtime access
+to the Docker daemon. Continue to declare each owned workload container with
+`ContainerSpec` for lifecycle verification.
+
+The equivalent CLI is explicit about placement:
+
+```sh
+engagequeue --execution-mode docker --state-dir "$PWD/.engagequeue-runtime" init \
+  --workspace "$PWD" --runtime-wheel "$PWD/dist/engagequeue-0.1.1-py3-none-any.whl"
+engagequeue --execution-mode docker --state-dir "$PWD/.engagequeue-runtime" submit \
+  --key managed:example:1 --cwd "$PWD" -- sh job.sh
+engagequeue --execution-mode docker --state-dir "$PWD/.engagequeue-runtime" runtime info --json
+engagequeue --execution-mode docker --state-dir "$PWD/.engagequeue-runtime" runtime stop --timeout 120
+engagequeue --execution-mode docker --state-dir "$PWD/.engagequeue-runtime" runtime start
+```
+
+Repeat `--workspace` for multiple roots. `--image` is the alternative to
+`--runtime-wheel`; initialization also accepts `--docker-context` and
+`--docker-jobs`. New jobs' working directories, outputs, and container CID files
+must be under a declared workspace or the runtime's per-job artifact directory.
+Other runtime state paths are reserved. Use `DockerExecutor` or the saved
+managed profile consistently for that state directory; explicit local execution
+rejects a managed state directory.
+
+## Submission and job control
 
 `submit` accepts argument vectors, an explicit working directory, environment,
 stdout/stderr paths, pool, timeout, output-size policy, and optional resource

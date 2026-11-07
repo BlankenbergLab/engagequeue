@@ -78,6 +78,9 @@ class PoolConfig:
     cancel_grace: float = 10.0
 
     def __post_init__(self) -> None:
+        # Preserve execution-host CPU intent for managed clients without
+        # changing the existing public normalized value or serialization.
+        object.__setattr__(self, "_automatic_capacity", self.max_jobs == "*")
         object.__setattr__(self, "max_jobs", capacity(self.max_jobs))
         if self.backend not in ("native", "systemd"):
             raise ValueError("backend must be 'native' or 'systemd'")

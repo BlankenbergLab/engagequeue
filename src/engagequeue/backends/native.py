@@ -1,7 +1,8 @@
 """Detached native supervision and the durable execution gate.
 
-Each worker is a Linux child subreaper. A separately registered command recorder
-persists the actual command's exit even if its original controller disappears.
+Linux workers contain descendants through child subreaping; macOS workers retain
+a recorder anchor for their command's process group. The separately registered
+recorder persists the command's exit even if its original controller disappears.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from pathlib import Path
 
 import psutil
 
+from .. import _platform
 from .containers import (
     ContainerOwnershipError,
     ContainerUnavailable,
@@ -26,6 +28,7 @@ from .containers import (
     _valid_container_id,
 )
 from .processes import (
+    ProcessOwnershipError,
     alive,
     become_subreaper,
     boot_identity,
@@ -88,6 +91,11 @@ def child(state_dir: str, job_id: str, token: str) -> int:
                 return 125
             if record["cancel_requested"] or interrupted:
                 store.update(job_id, execution_returncode=143, execution_finished=time.time())
+                if _platform.system_name() == "darwin":
+                    from .darwin import wait_for_exit_grant
+
+                    if not wait_for_exit_grant(store, job_id, token, command):
+                        return 125
                 return 143
             if record.get("execution_granted"):
                 break
@@ -124,6 +132,11 @@ def child(state_dir: str, job_id: str, token: str) -> int:
             failure = f"Cannot execute command: {type(exc).__name__}: {exc.strerror}"
         finally:
             store.update(job_id, execution_returncode=code, execution_finished=time.time(), execution_failure=failure)
+        if _platform.system_name() == "darwin":
+            from .darwin import wait_for_exit_grant
+
+            if not wait_for_exit_grant(store, job_id, token, command):
+                return 125
         return code if code >= 0 else 128 - code
 
 
@@ -363,7 +376,12 @@ def supervise(state_dir: str, job_id: str, token: str, *, systemd: bool = False)
         launcher = Unit(job_id, token, spec, record["cancel_grace"])
         store.update(job_id, backend_info={"unit": launcher.name, "token": token})
     else:
-        launcher = NativeLauncher()
+        if _platform.system_name() == "darwin":
+            from .darwin import DarwinLauncher
+
+            launcher = DarwinLauncher(store, job_id, token)
+        else:
+            launcher = NativeLauncher()
         if spec.get("require_hard_limits") and (spec.get("cpus") or spec.get("memory_mb")):
             store.transition(
                 job_id,
@@ -522,7 +540,7 @@ def supervise(state_dir: str, job_id: str, token: str, *, systemd: bool = False)
                     launcher.cleanup()
                     return 125
             time.sleep(0.05)
-    except (ContainerUnavailable, ContainerOwnershipError, psutil.AccessDenied) as exc:
+    except (ContainerUnavailable, ContainerOwnershipError, ProcessOwnershipError, psutil.AccessDenied) as exc:
         # Unavailable ownership evidence cannot authorize kill, slot release,
         # or workspace cleanup. Operators have an explicit reconciliation API.
         store.transition(job_id, "LOST", reason=f"Execution ownership requires reconciliation: {exc}")

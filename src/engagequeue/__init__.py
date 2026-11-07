@@ -12,11 +12,13 @@ from .errors import (
     UnsupportedBackend,
 )
 from .executor import Executor
+from .managed import DockerExecutor
 from .models import ContainerSpec, JobHandle, JobSpec, JobState, JobStatus, PoolConfig
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __all__ = [
     "Executor",
+    "DockerExecutor",
     "JobSpec",
     "JobHandle",
     "JobStatus",

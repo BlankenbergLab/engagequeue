@@ -74,6 +74,8 @@ def test_explicit_empty_environment_still_does_not_inherit(client, tmp_path, mon
 
 @pytest.mark.parametrize("pruned", [False, True])
 def test_terminal_receipt_precedes_workspace_pool_and_runtime_checks(client, tmp_path, monkeypatch, pruned):
+    # This receipt was accepted on a Linux execution host. Later adoption must
+    # not repeat the original host's backend capability checks.
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     client.configure_pool("limited", PoolConfig(backend="systemd"))
@@ -85,7 +87,9 @@ def test_terminal_receipt_precedes_workspace_pool_and_runtime_checks(client, tmp
         require_hard_limits=True,
         env_overrides={"SECRET": "original-private-value"},
     )
-    job = client.submit(spec, key="receipt-first")
+    with monkeypatch.context() as linux:
+        linux.setattr("engagequeue._platform.system_name", lambda: "linux")
+        job = client.submit(spec, key="receipt-first")
     assert client.store.transition(job.id, "FAILED", writers_stopped=True, returncode=70)
     if pruned:
         assert client.prune(job.id) == 1

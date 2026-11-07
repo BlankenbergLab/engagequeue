@@ -16,20 +16,18 @@ from typing import Any, Mapping
 
 import psutil
 
+from . import _platform
 from .errors import LostJobError, RuntimeUnavailable, UnsupportedBackend
 from .models import JobHandle, JobSpec, JobState, JobStatus, PoolConfig, positive_number
 from .store import Store, dump
 
 
 def boot_identity() -> str:
-    try:
-        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
-    except OSError:
-        return str(psutil.boot_time())
+    return _platform.boot_id()
 
 
 def pid_namespace() -> int:
-    return Path("/proc/self/ns/pid").stat().st_ino
+    return _platform.pid_namespace()
 
 
 def process_alive(pid: int | None, birth: float | None) -> bool | None:
@@ -189,6 +187,24 @@ class Executor:
                 time.sleep(0.05)
             raise RuntimeUnavailable(f"Runtime did not become ready; inspect {self.store.root / 'runtime.log'}")
 
+    def _validate_new_submission(self, spec: JobSpec, pool: dict) -> None:
+        """Validate fresh intent after durable-receipt lookup, before acceptance.
+
+        Execution transports may extend this hook with their mount or runtime
+        policy. Retries adopting an existing receipt never invoke it.
+        """
+        if pool["backend"] == "systemd":
+            if _platform.system_name() != "linux":
+                raise UnsupportedBackend("The systemd backend is available only on Linux")
+        else:
+            _platform.require_native()
+        if not Path(spec.cwd).is_dir():
+            raise ValueError("Job working directory must exist")
+        if spec.require_hard_limits and pool["backend"] == "native" and (spec.cpus or spec.memory_mb):
+            raise UnsupportedBackend(
+                "Native process supervision does not provide hard cgroup CPU/memory limits; select systemd on Linux"
+            )
+
     def submit(self, spec: JobSpec, key: str | None = None) -> JobHandle:
         self._check()
         if not isinstance(spec, JobSpec):
@@ -222,16 +238,11 @@ class Executor:
             # holding its acceptance transaction, including for racing clients.
             if self.attach_only:
                 self.ensure_runtime()
-            if not Path(spec.cwd).is_dir():
-                raise ValueError("Job working directory must exist")
             row = connection.execute("SELECT config FROM pools WHERE name=?", (spec.pool,)).fetchone()
             if row is None:
                 raise KeyError(f"Unknown execution pool {spec.pool!r}")
             pool = json.loads(row[0])
-            if spec.require_hard_limits and pool["backend"] == "native" and (spec.cpus or spec.memory_mb):
-                raise UnsupportedBackend(
-                    "Native process supervision does not provide hard cgroup CPU/memory limits; select systemd"
-                )
+            self._validate_new_submission(spec, pool)
             execution = dict(accepted)
             overrides = execution.pop("env_overrides", {})
             # Capture inherited values only on first acceptance. The digest
@@ -271,7 +282,8 @@ class Executor:
             if result.terminal:
                 return result
             if raise_on_lost and result.needs_reconciliation:
-                raise LostJobError(f"Job {job_id} has uncertain ownership; inspect and reconcile it")
+                detail = f": {result.reason}" if result.reason else ""
+                raise LostJobError(f"Job {job_id} has uncertain ownership; inspect and reconcile it{detail}")
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError(f"Job {job_id} has not reached a confirmed terminal state")
             time.sleep(min(self.poll_interval, 0.25))

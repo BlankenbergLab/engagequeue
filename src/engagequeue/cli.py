@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import ContainerSpec, Executor, JobSpec, PoolConfig
+from . import ContainerSpec, DockerExecutor, Executor, JobSpec, PoolConfig
 from .errors import EngageQueueError
 
 
@@ -25,8 +25,11 @@ def _emit(value, *, structured=False):
 
 def parser():
     result = argparse.ArgumentParser(description="Local jobs. Make it so.")
-    result.add_argument("--version", action="version", version="engagequeue 0.1.0")
+    result.add_argument("--version", action="version", version="engagequeue 0.1.1")
     result.add_argument("--state-dir", default=os.environ.get("ENGAGEQUEUE_STATE_DIR"))
+    result.add_argument(
+        "--execution-mode", choices=("local", "docker"), help="Default: detect managed state, otherwise local"
+    )
     result.add_argument(
         "--attach-only", action="store_true", help="Attach to an externally managed runtime without starting processes"
     )
@@ -37,6 +40,16 @@ def parser():
     init.add_argument("--max-jobs", default="1", help="Positive cap, 0 for unbounded, or '*' for CPU count")
     init.add_argument("--backend", choices=("native", "systemd"), default="native")
     init.add_argument("--cancel-grace", type=float, default=10)
+    init.add_argument(
+        "--workspace", action="append", help="Persistent host workspace root for managed Docker execution"
+    )
+    runtime_image = init.add_mutually_exclusive_group()
+    runtime_image.add_argument("--image", help="Compatible custom Linux runtime image")
+    runtime_image.add_argument("--runtime-wheel", help="Matching EngageQueue wheel for building the Linux runtime")
+    init.add_argument("--docker-context", help="Local Docker context used by the managed runtime")
+    init.add_argument(
+        "--docker-jobs", action="store_true", default=None, help="Grant managed jobs Docker-daemon access"
+    )
     submit = commands.add_parser("submit", help="Submit an argument vector without an implicit shell")
     submit.add_argument("--key", help="Stable idempotency key; identical retries return the same job")
     submit.add_argument("--pool", default="default")
@@ -77,7 +90,7 @@ def parser():
     pruning.add_argument("--job-id")
     pruning.add_argument("--before", type=float, help="Only records finished before this Unix timestamp")
     runtime = commands.add_parser("runtime", help="Explicit runtime lifecycle controls")
-    runtime.add_argument("action", choices=("serve", "drain", "resume", "shutdown"))
+    runtime.add_argument("action", choices=("serve", "drain", "resume", "shutdown", "start", "stop", "info"))
     runtime.add_argument("--wait", action="store_true")
     runtime.add_argument("--timeout", type=float)
     for command in commands.choices.values():
@@ -91,17 +104,43 @@ def main(argv=None):
     if not args.state_dir:
         command_parser.error("provide --state-dir or ENGAGEQUEUE_STATE_DIR")
     try:
+        managed = args.execution_mode == "docker" or (
+            args.execution_mode is None and (Path(args.state_dir).expanduser().resolve() / "managed.json").exists()
+        )
+        if managed and args.runtime_python:
+            raise ValueError("Managed Linux uses its image's Python; configure --image instead of --runtime-python")
         pools = None
         if args.command == "init":
             pools = {args.pool: PoolConfig(args.max_jobs, args.backend, args.cancel_grace)}
         if args.command == "runtime" and args.action == "serve":
+            if managed:
+                raise ValueError("Use runtime start or resume for the managed Linux runtime")
             from .runtime import serve
 
             return serve(args.state_dir)
-        with Executor(
-            args.state_dir, pools=pools, runtime_python=args.runtime_python, attach_only=args.attach_only
-        ) as executor:
+        if not managed and args.command == "runtime" and args.action in ("start", "stop", "info"):
+            raise ValueError("runtime start/stop/info require managed Docker execution")
+        if (
+            not managed
+            and args.command == "init"
+            and (args.workspace or args.image or args.runtime_wheel or args.docker_context or args.docker_jobs)
+        ):
+            raise ValueError("Docker initialization options require --execution-mode docker")
+        executor = (
+            DockerExecutor(args.state_dir, pools=pools, attach_only=args.attach_only)
+            if managed
+            else Executor(args.state_dir, pools=pools, runtime_python=args.runtime_python, attach_only=args.attach_only)
+        )
+        with executor:
             if args.command == "init":
+                if managed:
+                    executor.initialize(
+                        workspaces=args.workspace,
+                        image=args.image,
+                        wheel=args.runtime_wheel,
+                        docker_context=args.docker_context,
+                        docker_jobs=args.docker_jobs,
+                    )
                 value = {
                     "state_dir": str(Path(args.state_dir).resolve()),
                     "pool": args.pool,
@@ -173,6 +212,12 @@ def main(argv=None):
                     value = executor.drain()
                 elif args.action == "resume":
                     value = executor.resume()
+                elif args.action == "start":
+                    value = executor.start()
+                elif args.action == "stop":
+                    value = executor.stop(timeout=120 if args.timeout is None else args.timeout)
+                elif args.action == "info":
+                    value = executor.runtime_info()
                 else:
                     value = executor.shutdown(wait=args.wait, timeout=args.timeout)
             else:

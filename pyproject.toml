@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "engagequeue"
-version = "0.1.0"
+version = "0.1.1"
 description = "Durable local job execution for Python applications and the command line"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "Daniel Blankenberg"}]
 dependencies = ["psutil>=5.9", "PyYAML>=6"]
-classifiers = ["Operating System :: POSIX :: Linux", "Programming Language :: Python :: 3", "Topic :: System :: Distributed Computing"]
+classifiers = ["Operating System :: POSIX :: Linux", "Operating System :: MacOS :: MacOS X", "Programming Language :: Python :: 3", "Topic :: System :: Distributed Computing"]
 
 [project.urls]
 Source = "https://github.com/BlankenbergLab/engagequeue"
@@ -27,6 +27,9 @@ engagequeue = "engagequeue.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+engagequeue = ["runtime_image/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -80,7 +80,8 @@ def await_record(
         if predicate(current):
             return current
         time.sleep(0.025)
-    pytest.fail(f"Worker did not reach expected state: {store.get(row['id'])['state']}")
+    current = store.get(row["id"])
+    pytest.fail(f"Worker did not reach expected state: {current['state']}; {current.get('reason')}")
 
 
 def finish(process):
@@ -100,13 +101,14 @@ def test_real_command_exit_and_output_survive_worker_collection(tmp_path, code, 
     process = launch(store, row)
     current = await_record(store, row)
     finish(process)
-    assert current["state"] == state and current["returncode"] == expected
+    assert current["state"] == state and current["returncode"] == expected, current.get("reason")
     assert current["writers_stopped"]
     assert (tmp_path / "stdout").read_text() == ("exact output\n" if expected == 0 else "")
     assert (tmp_path / "stderr").read_text() == ("failure detail\n" if expected else "")
     assert store.database.stat().st_mode & 0o777 == 0o600
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper contains session-escaping descendants")
 def test_daemonized_double_fork_writer_keeps_job_active(tmp_path):
     code = """
 import os,time
@@ -124,10 +126,11 @@ os._exit(0)
     process = launch(store, row)
     current = await_record(store, row)
     finish(process)
-    assert current["state"] == "SUCCEEDED"
+    assert current["state"] == "SUCCEEDED", current.get("reason")
     assert (tmp_path / "daemon-finished").read_text() == "complete"
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper contains session-escaping descendants")
 def test_cancel_terminates_setsid_descendant_and_waits_for_writers(tmp_path):
     code = """
 import os,time
@@ -148,7 +151,7 @@ while True: time.sleep(.01)
     store.request_cancel(row["id"])
     current = await_record(store, row)
     finish(process)
-    assert current["state"] == "CANCELLED" and current["writers_stopped"]
+    assert current["state"] == "CANCELLED" and current["writers_stopped"], current.get("reason")
     assert all(alive(item) is False for item in records)
 
 
@@ -165,7 +168,7 @@ def test_ignored_term_escalates_after_grace(tmp_path):
     assert store.get(row["id"])["state"] == "STOPPING"
     current = await_record(store, row)
     finish(process)
-    assert current["state"] == "CANCELLED" and time.monotonic() - start >= 0.1
+    assert current["state"] == "CANCELLED" and time.monotonic() - start >= 0.1, current.get("reason")
 
 
 @pytest.mark.parametrize("limit,expected", [({"timeout": 0.25}, 124), ({"output_limit": 128}, 153)])
@@ -174,7 +177,7 @@ def test_execution_limits_stop_writers(tmp_path, limit, expected):
     process = launch(store, row)
     current = await_record(store, row)
     finish(process)
-    assert current["state"] == "FAILED" and current["returncode"] == expected
+    assert current["state"] == "FAILED" and current["returncode"] == expected, current.get("reason")
     assert current["writers_stopped"]
 
 
@@ -185,7 +188,7 @@ def test_native_rejects_requested_hard_limits_before_execution(tmp_path):
     process = launch(store, row)
     current = await_record(store, row)
     finish(process)
-    assert current["state"] == "FAILED" and current["returncode"] == 125
+    assert current["state"] == "FAILED" and current["returncode"] == 125, current.get("reason")
     assert not (tmp_path / "should-not-run").exists()
 
 
@@ -200,7 +203,9 @@ def test_duplicate_worker_does_not_repeat_command(tmp_path):
     current = await_record(store, row)
     finish(first)
     finish(second)
-    assert current["state"] == "SUCCEEDED" and (tmp_path / "count").read_text() == "x"
+    assert current["state"] == "SUCCEEDED", current.get("reason")
+    assert current["writers_stopped"]
+    assert (tmp_path / "count").read_text() == "x"
 
 
 def test_dead_child_before_registration_fails_and_frees_capacity(tmp_path):
@@ -208,16 +213,19 @@ def test_dead_child_before_registration_fails_and_frees_capacity(tmp_path):
     bootstrap = """
 import subprocess,sys
 from engagequeue.backends.native import NativeLauncher
+from engagequeue.backends.darwin import DarwinLauncher
 from engagequeue.worker import main
 def start(self,argv):
-    self.process=subprocess.Popen([sys.executable,'-c','pass'])
+    self.process=subprocess.Popen([sys.executable,'-c','pass'],start_new_session=True)
+    self.pgid=self.process.pid
 NativeLauncher.start=start
+DarwinLauncher.start=start
 sys.exit(main())
 """
     process = launch(store, row, bootstrap=bootstrap)
     current = await_record(store, row, timeout=4)
     finish(process)
-    assert current["state"] == "FAILED" and "before registration" in current["reason"]
+    assert current["state"] == "FAILED" and "before registration" in current["reason"], current.get("reason")
     assert current["writers_stopped"] and not current["command_pid"]
 
 
@@ -234,10 +242,11 @@ sys.exit(main())
     process = launch(store, row, bootstrap=bootstrap)
     current = await_record(store, row)
     finish(process)
-    assert current["state"] == "FAILED" and current["writers_stopped"]
+    assert current["state"] == "FAILED" and current["writers_stopped"], current.get("reason")
     assert "no user manager" in current["reason"]
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Requires Linux subreaper/kernel child accounting")
 def test_kernel_quiescence_blocks_completion_when_process_snapshot_misses_daemon(tmp_path):
     """A deliberate empty /proc snapshot cannot stand in for kernel ECHILD."""
     code = """
@@ -269,10 +278,11 @@ sys.exit(main())
     (tmp_path / "release-daemon").touch()
     current = await_record(store, row)
     finish(process)
-    assert current["state"] == "SUCCEEDED" and current["writers_stopped"]
+    assert current["state"] == "SUCCEEDED" and current["writers_stopped"], current.get("reason")
     assert (tmp_path / "daemon-finished").exists()
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Requires Linux subreaper/kernel child accounting")
 def test_concurrent_double_fork_writers_all_finish_before_terminal(tmp_path):
     code = """
 import os,time
@@ -295,5 +305,5 @@ os._exit(0)
     for directory, store, row, process in attempts:
         current = await_record(store, row)
         finish(process)
-        assert current["state"] == "SUCCEEDED" and current["writers_stopped"]
+        assert current["state"] == "SUCCEEDED" and current["writers_stopped"], current.get("reason")
         assert (directory / "daemon-finished").exists()

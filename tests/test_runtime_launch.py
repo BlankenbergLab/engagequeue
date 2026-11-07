@@ -19,7 +19,7 @@ def _queued_runtime(tmp_path, monkeypatch):
     store.ensure_pool("default", PoolConfig(1))
     for identifier in ("bad", "good"):
         spec = JobSpec(
-            ["/bin/true"],
+            ["/usr/bin/true"],
             str(tmp_path),
             env={},
             stdout=str(tmp_path / (identifier + ".stdout")),

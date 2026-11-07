@@ -18,15 +18,24 @@ the registered publisher; see [PyPI's trusted publishing documentation](https://
 
 ## Make a release
 
+The current macOS and managed-runtime candidate is **0.1.1** on
+`macos-support`. Complete that branch's Linux, Intel/Apple Silicon macOS, and
+AMD64/ARM64 managed-Docker checks before preparing the release. After review,
+squash the candidate into the repository's single commit on `main`, push that
+result, and wait for the final `main` checks to pass. Do not create the release
+tag or publish a GitHub release while either set of checks is pending or failed.
+
 1. Set the same version in `pyproject.toml`, `src/engagequeue/__init__.py`, and
    the CLI's `--version` definition in `src/engagequeue/cli.py`.
-2. Push the reviewed commit and create a tag for that version, such as `v0.1.0`.
+2. With the reviewed `main` commit's checks green, create a tag for that version,
+   such as `v0.1.1`.
    A tag without the `v` prefix is also accepted.
 3. Publish a GitHub release for that tag. Publishing the release starts the
    workflow; ordinary pushes, pull requests, and draft releases do not publish.
 4. Check the **Publish to PyPI** workflow result and the package on PyPI.
 
-The workflow runs the Python 3.10, 3.12, and 3.14 test matrix, checks the release
+The workflow reruns the Linux and macOS Python 3.10, 3.12, and 3.14 matrices and
+the Linux AMD64/ARM64 managed-Docker checks, checks the release
 tag against source and artifact versions, builds a wheel and source archive,
 and checks both with Twine. It installs the wheel in a clean project-local
 environment and verifies the CLI and a real native execution. A separate
@@ -43,12 +52,12 @@ including the explicitly declared `setuptools` backend and `wheel` needed for
 non-isolated builds, then run:
 
 ```sh
-.conda/engagequeue/bin/python scripts/check_release.py --tag v0.1.0
+.conda/engagequeue/bin/python scripts/check_release.py --tag v0.1.1
 .conda/engagequeue/bin/python -m build --no-isolation
-.conda/engagequeue/bin/python scripts/check_release.py --tag v0.1.0 --dist dist
+.conda/engagequeue/bin/python scripts/check_release.py --tag v0.1.1 --dist dist
 .conda/engagequeue/bin/python -m twine check --strict dist/*
 ```
 
-Use the intended version in place of `v0.1.0` and a clean distribution directory
+Use the intended version in place of `v0.1.1` and a clean distribution directory
 so files from an earlier version cannot be uploaded accidentally. Local validation
 does not contact PyPI or upload any distributions.

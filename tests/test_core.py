@@ -104,7 +104,7 @@ def test_lost_submission_response_does_not_repeat_command(executor, tmp_path, mo
     executor.wait(accepted.id, 15)
     assert (tmp_path / "count").read_text() == "one\n"
     with pytest.raises(SubmissionConflict):
-        executor.submit(JobSpec(["/bin/false"], str(tmp_path)), key="accepted-before-response")
+        executor.submit(JobSpec(["/usr/bin/false"], str(tmp_path)), key="accepted-before-response")
 
 
 def test_close_disconnects_only_and_all_client_death_preserves_queue(tmp_path):
@@ -201,7 +201,7 @@ def test_fifo_capacity_is_shared_across_independent_clients(executor, tmp_path):
 def test_queued_cancel_and_drain_are_explicit(executor, tmp_path):
     executor.drain()
     with pytest.raises(AdmissionClosed):
-        executor.submit(JobSpec(["/bin/true"], str(tmp_path)), key="closed-admission")
+        executor.submit(JobSpec(["/usr/bin/true"], str(tmp_path)), key="closed-admission")
     executor.resume()
     executor.configure_pool("blocked", PoolConfig(1))
     first = executor.submit(
@@ -226,7 +226,9 @@ def test_queued_cancel_and_drain_are_explicit(executor, tmp_path):
 
 
 def test_environment_inspection_is_redacted(executor, tmp_path):
-    job = executor.submit(JobSpec(["/bin/true"], str(tmp_path), env={"TEST_SECRET": "do-not-print"}), key="redaction")
+    job = executor.submit(
+        JobSpec(["/usr/bin/true"], str(tmp_path), env={"TEST_SECRET": "do-not-print"}), key="redaction"
+    )
     executor.wait(job.id, 15)
     report = executor.inspect(job.id)
     assert report["spec"]["env"]["TEST_SECRET"] == "<redacted>"
@@ -238,7 +240,7 @@ def test_environment_inspection_is_redacted(executor, tmp_path):
 def test_job_spec_multiple_containers_round_trip(tmp_path):
     first = ContainerSpec(name="tool", label_value="attempt")
     second = ContainerSpec(name="metadata", label_value="attempt")
-    spec = JobSpec(["/bin/true"], str(tmp_path), container=first, containers=(second,))
+    spec = JobSpec(["/usr/bin/true"], str(tmp_path), container=first, containers=(second,))
     restored = JobSpec.from_dict(spec.to_dict())
     assert restored == spec
     assert restored.containers == (second,)
@@ -322,7 +324,7 @@ def test_preloaded_handle_is_usable_after_fork(executor, tmp_path):
     assert os.waitstatus_to_exitcode(status) == 0
     assert executor.store.pool("fork-child")["max_jobs"] == 2
     # Closing the inherited child handle did not close its parent copy.
-    job = executor.submit(JobSpec(["/bin/true"], str(tmp_path)), key="after-fork")
+    job = executor.submit(JobSpec(["/usr/bin/true"], str(tmp_path)), key="after-fork")
     assert executor.wait(job.id, 15).state is JobState.SUCCEEDED
 
 
@@ -359,11 +361,11 @@ def test_pruned_acceptance_receipt_prevents_late_retry(executor, tmp_path):
     assert executor.submit(spec, key="retained-receipt").id == job.id
     assert (tmp_path / "count").read_text() == "one\n"
     with pytest.raises(SubmissionConflict):
-        executor.submit(JobSpec(["/bin/false"], str(tmp_path)), key="retained-receipt")
+        executor.submit(JobSpec(["/usr/bin/false"], str(tmp_path)), key="retained-receipt")
 
 
 def uncertain_record(executor, tmp_path, *, live_payload=False):
-    spec = JobSpec(["/bin/true"], str(tmp_path)).to_dict()
+    spec = JobSpec(["/usr/bin/true"], str(tmp_path)).to_dict()
     record = {
         "id": "uncertain",
         "key": "uncertain",
@@ -416,7 +418,7 @@ def test_fresh_runtime_ignores_unrelated_pythonpath(executor, tmp_path, monkeypa
     (poisoned / "engagequeue").mkdir(parents=True)
     (poisoned / "engagequeue/__init__.py").write_text("raise RuntimeError('wrong package')")
     monkeypatch.setenv("PYTHONPATH", str(poisoned))
-    job = executor.submit(JobSpec(["/bin/true"], str(tmp_path)), key="source-bootstrap")
+    job = executor.submit(JobSpec(["/usr/bin/true"], str(tmp_path)), key="source-bootstrap")
     assert executor.wait(job.id, 15).state is JobState.SUCCEEDED
     source = executor.store.get_meta("runtime_source")
     assert source is None or Path(source).name == "src"
@@ -435,7 +437,7 @@ def test_attach_only_uses_external_lock_without_client_pid_or_interpreter(execut
         )
         with Executor(executor.state_dir, attach_only=True) as client:
             client.ensure_runtime()
-            job = client.submit(JobSpec(["/bin/true"], str(tmp_path)), key="external-host-client")
+            job = client.submit(JobSpec(["/usr/bin/true"], str(tmp_path)), key="external-host-client")
             assert client.wait(job.id, 15).state is JobState.SUCCEEDED
             assert client.runtime_python == stored_python
     executor.shutdown(wait=True, timeout=8)
@@ -445,11 +447,11 @@ def test_attach_only_uses_external_lock_without_client_pid_or_interpreter(execut
         # Receipt lookup precedes new-job checks; closed admission is rejected
         # before preparing a new execution or probing its external runtime.
         with pytest.raises(AdmissionClosed, match="Execution admission is closed"):
-            offline.submit(JobSpec(["/bin/true"], str(tmp_path)), key="must-not-accept-offline")
+            offline.submit(JobSpec(["/usr/bin/true"], str(tmp_path)), key="must-not-accept-offline")
         assert offline.lookup("must-not-accept-offline") is None
         offline.store.put_meta("admission_open", True)
         with pytest.raises(RuntimeUnavailable, match="External runtime is not ready"):
-            offline.submit(JobSpec(["/bin/true"], str(tmp_path)), key="open-but-offline")
+            offline.submit(JobSpec(["/usr/bin/true"], str(tmp_path)), key="open-but-offline")
         assert offline.lookup("open-but-offline") is None
 
 

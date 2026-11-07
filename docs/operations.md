@@ -1,5 +1,47 @@
 # Operation and recovery
 
+## Runtime placement
+
+`Executor` and `--execution-mode local` execute on the host. The CLI automatically
+recognizes an existing managed profile and otherwise defaults to local execution. Linux
+native supervision owns daemonized descendants through a subreaper. macOS local
+supervision owns foreground commands and their process groups: keep descendants
+in that group and use managed Docker execution for daemonizing workloads.
+Systemd user-unit supervision is Linux-only.
+
+`DockerExecutor` and `--execution-mode docker` place the Linux native runtime in
+an owned Docker container on either host platform. The managed profile is stored
+in `state_dir/managed.json`. SQLite and private runtime state are in a persistent
+Docker volume mounted at the same state path inside the runtime. The host
+`state_dir/jobs` directory is bound separately so job artifacts and default logs
+remain accessible. Declared workspace roots are bound at identical absolute
+paths; other state paths are reserved for the runtime.
+
+Initialize a managed profile with explicit workspaces and an image or runtime
+wheel, as shown in [installation](installation.md). Subsequent clients attach to
+that profile. Runtime controls for this mode are:
+
+```sh
+engagequeue --execution-mode docker --state-dir "$PWD/.engagequeue-runtime" runtime info --json
+engagequeue --execution-mode docker --state-dir "$PWD/.engagequeue-runtime" runtime stop --timeout 120
+engagequeue --execution-mode docker --state-dir "$PWD/.engagequeue-runtime" runtime start
+```
+
+Managed `stop` drains active work, shuts down the coordinator, and stops the
+owned container after confirmed quiescence. It preserves the volume and queued
+work; `start` resumes admission. A timeout leaves resources available for
+inspection rather than deleting the runtime. Stop cleanly before changing the
+profile's image, mounts, Docker context, or sibling-container setting. Client
+`close()` and context-manager exit leave accepted jobs and admission running.
+Docker Desktop and its Linux VM must remain running for managed jobs to run.
+
+Enable sibling Docker workloads explicitly with `initialize(docker_jobs=True)`
+or `init --docker-jobs`. This shares access to the configured Docker daemon with
+the runtime; declared `ContainerSpec` ownership checks still apply. Managed
+runtime pools use the native backend, not systemd.
+
+## Local coordination and supervision
+
 One independent scheduler is elected for each persistent state directory.
 Its SQLite store coordinates FIFO admission and capacity across Python clients
 and CLI processes. A positive pool cap bounds executions; `0`/`None` is
@@ -37,7 +79,7 @@ engagequeue --state-dir /ssd/engagequeue runtime shutdown --wait --timeout 120
 engagequeue --state-dir /ssd/engagequeue runtime resume
 ```
 
-Native supervision uses a Linux subreaper, durable command registration and an
+Linux native supervision uses a subreaper, durable command registration and an
 execution gate. PID creation times and host boot identity prevent signalling
 reused PIDs. Docker ownership checks remain necessary because a container can
 outlive its CLI process or cgroup. Systemd mode uses independently owned user

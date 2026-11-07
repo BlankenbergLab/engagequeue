@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from .errors import AdmissionClosed, SubmissionConflict
+from .errors import AdmissionClosed, RuntimeUnavailable, SubmissionConflict
 from .models import TERMINAL_STATES, JobState, PoolConfig
 
 SCHEMA_VERSION = 1
@@ -39,6 +39,8 @@ def dump(value: Any) -> str:
 class Store:
     def __init__(self, state_dir: str | Path):
         self.root = Path(state_dir).expanduser().resolve()
+        if (self.root / "managed.json").exists() or (self.root / "managed.json").is_symlink():
+            raise RuntimeUnavailable("Managed Docker state requires DockerExecutor or --execution-mode docker")
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         if self.root.stat().st_uid != os.getuid():
             raise PermissionError("Execution state must be owned by the current user")
@@ -76,6 +78,10 @@ class Store:
             self._initialize_locked()
 
     def _initialize_locked(self) -> None:
+        # A native initializer may have started just before managed mode was
+        # reserved. Recheck while sharing its initialization election lock.
+        if (self.root / "managed.json").exists() or (self.root / "managed.json").is_symlink():
+            raise RuntimeUnavailable("Managed Docker state requires DockerExecutor or --execution-mode docker")
         descriptor = os.open(self.database, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(descriptor)
         self.database.chmod(0o600)

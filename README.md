@@ -11,8 +11,15 @@ of accepted jobs.
 
 The scheduler and job supervisors run independently of application clients.
 Closing a Python handle leaves both running jobs and queue admission active.
-The default native backend requires no systemd; an optional systemd backend
-uses user services and cgroups.
+Local execution supports Linux and macOS. Linux native supervision tracks
+daemonized descendants; macOS local execution supports foreground commands and
+their process groups. Both run without systemd. An optional Linux systemd
+backend uses user services and cgroups.
+
+For Linux supervision on a Mac, use managed Docker execution through
+`DockerExecutor` or the CLI's `--execution-mode docker`. EngageQueue manages an
+owned Linux runtime container, persistent state, and declared workspace mounts.
+Docker Desktop must remain running while that runtime executes work.
 
 See [installation](https://github.com/BlankenbergLab/engagequeue/blob/main/docs/installation.md),
 [the API and CLI](https://github.com/BlankenbergLab/engagequeue/blob/main/docs/api.md),

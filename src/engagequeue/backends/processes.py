@@ -1,21 +1,24 @@
-"""Linux process ownership checks used before signals and completion."""
+"""Process ownership checks and Linux descendant-containment primitives."""
 
 from __future__ import annotations
 
 import ctypes
 import os
 import signal
-from pathlib import Path
 
 import psutil
+
+from .. import _platform
+from ..errors import UnsupportedBackend
+
+
+class ProcessOwnershipError(RuntimeError):
+    """Native process containment can no longer be verified."""
 
 
 def boot_identity() -> dict[str, str]:
     """Use boot and PID namespace, not a mutable hostname, to qualify PIDs."""
-    return {
-        "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
-        "pid_namespace": str(os.stat("/proc/self/ns/pid").st_ino),
-    }
+    return _platform.ownership_identity()
 
 
 def identity(pid: int) -> dict[str, float | int]:
@@ -68,6 +71,8 @@ def signal_owned(record: dict, signum: int) -> bool:
 
 def become_subreaper() -> None:
     """Adopt double-forked descendants even after they create new sessions."""
+    if _platform.system_name() != "linux":
+        raise UnsupportedBackend("Child subreaping is available only on Linux")
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(36, 1, 0, 0, 0) != 0:  # Linux PR_SET_CHILD_SUBREAPER
         error = ctypes.get_errno()
